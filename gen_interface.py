@@ -16,7 +16,7 @@ print("struct Dummy;\n")
 pos = 0
 # 搜索定义
 reg = re.compile(r'interface\s*([^{]+)\{([^\}]+)\}\s*')
-method_reg = re.compile(r'(\w+)\s+(\w+)(.*)')
+method_reg = re.compile(r'([^\s]+)\s+(\w+)(.*)')
 while True:
     res = reg.search(interface_declare, pos)
     # 重复搜索直到结果为空

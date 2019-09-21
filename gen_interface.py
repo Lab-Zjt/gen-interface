@@ -12,7 +12,7 @@ interface_declare = pathlib.Path(sys.argv[1]).read_text()
 protected = str(sys.argv[1]).replace('/', '_').replace('.', '_').upper()
 print('#ifndef %s' % protected)
 print('#define %s' % protected)
-print("struct Dummy;\n")
+print("struct _Dummy;\n")
 pos = 0
 # 搜索定义
 reg = re.compile(r'interface\s*([^{]+)\{([^\}]+)\}\s*')
@@ -28,7 +28,6 @@ while True:
     method_list = methods.strip().split('\n')
     declare_list = []
     inherit_list = []
-    ir = re.compile(r'')
     # 搜索方法
     for method in method_list:
         r = method_reg.search(method)
@@ -47,28 +46,29 @@ while True:
                 decl += ','
         decl += '{'
         print(decl)
+    print('  struct _Dummy{};')
     # 如果有方法定义，则需要增加一个模拟虚函数表、一个对象指针、一个模拟虚函数表指针
     init = ""
     if len(declare_list) != 0:
-        print('''  template<typename _T>
-        struct _Vtb {
-          static _Vtb _vtb;''')
+        print('  template<typename _T>')
+        print('  struct _Vtb {')
+        print('    static _Vtb _vtb;')
         init += '{'
         for declare in declare_list:
             print('    %s (_T::* %s)%s;' % declare)
             init += "&_T::%s, " % declare[1]
         init += '};'
         print('  };')
-        print('  Dummy* ptr;')
-        print('  _Vtb<Dummy>* vtb;')
+        print('  _Dummy* ptr;')
+        print('  _Vtb<_Dummy>* vtb;')
     # 构造函数
     print(' public:')
     construct = ""
     # 如果有继承定义，先初始化基类
     if len(inherit_list) == 0:
-        construct += "template<typename _T>\n"
+        construct += "  template<typename _T>\n"
     else:
-        construct += "template<typename _T, typename _SFINAE = typename std::enable_if<!std::is_same<_T, %s>::value>::type>\n" % interface_name
+        construct += "  template<typename _T, typename _SFINAE = typename std::enable_if<!std::is_same<_T, %s>::value>::type>\n" % interface_name
     construct += "  %s(_T& t): " % interface_name
     if len(inherit_list) != 0:
         for i in 0, len(inherit_list) - 1:
@@ -79,7 +79,7 @@ while True:
     if len(declare_list) != 0:
         if len(inherit_list) != 0:
             construct += ', '
-        construct += 'ptr(reinterpret_cast<Dummy*>(&t)), vtb(reinterpret_cast<_Vtb<Dummy>*>(&_Vtb<_T>::_vtb))'
+        construct += 'ptr(reinterpret_cast<_Dummy*>(&t)), vtb(reinterpret_cast<_Vtb<_Dummy>*>(&_Vtb<_T>::_vtb))'
     construct += ' {}'
     print(construct)
     # 通过模拟虚函数表转发函数调用

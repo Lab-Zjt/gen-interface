@@ -12,7 +12,6 @@ interface_declare = pathlib.Path(sys.argv[1]).read_text()
 protected = str(sys.argv[1]).replace('/', '_').replace('.', '_').upper()
 print('#ifndef %s' % protected)
 print('#define %s' % protected)
-print("struct _Dummy;\n")
 pos = 0
 # 搜索定义
 reg = re.compile(r'interface\s*([^{]+)\{([^\}]+)\}\s*')

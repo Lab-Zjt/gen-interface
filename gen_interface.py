@@ -8,11 +8,50 @@ import sys
 # 读取接口定义文件
 interface_declare = pathlib.Path(sys.argv[1]).read_text()
 
+# 共有定义
+
+print('''
+#ifndef _INTERFACE_BASIC_
+#define _INTERFACE_BASIC_
+#include <memory>
+#include <tuple>
+template<typename T, typename ...Args>
+inline std::shared_ptr<T> New(Args &&...args) {
+  return std::make_shared<T>(std::forward<Args>(args)...);
+}
+template<typename T>
+using Ref = std::shared_ptr<T>;
+template<typename T>
+using Ptr = std::unique_ptr<T>;
+template<typename T>
+using WeakRef = std::weak_ptr<T>;
+template<typename ...Ts>
+using R = std::tuple<Ts...>;
+struct Error {
+  const char *desc = nullptr;
+};
+bool operator==(const Error &lhs, const Error &rhs) { return lhs.desc == rhs.desc; }
+bool operator!=(const Error &lhs, const Error &rhs) { return lhs.desc != rhs.desc; }
+Error NoError;
+#endif
+''')
+
 # 头文件重复包含保护
 protected = str(sys.argv[1]).replace('/', '_').replace('.', '_').upper()
 print('#ifndef %s' % protected)
 print('#define %s' % protected)
-print('#include <utility>\n')
+print('#include <utility>\n#include <memory>')
+print('''
+#if __cplusplus < 201703ul
+template <typename T, typename U>
+std::shared_ptr<T> reinterpret_pointer_cast(const std::shared_ptr<U>& r) noexcept  {
+  auto p = reinterpret_cast<typename std::shared_ptr<T>::element_type *>(r.get());
+  return std::shared_ptr<T>(r, p);
+}
+#else
+using std::reinterpret_pointer_cast;
+#endif
+''')
 pos = 0
 # 搜索定义
 reg = re.compile(r'interface\s*([^{]+)\{([^\}]+)\}\s*')
@@ -59,7 +98,7 @@ while True:
             init += "&_T::%s, " % declare[1]
         init += '};'
         print('  };')
-        print('  _Dummy* ptr;')
+        print('  std::shared_ptr<_Dummy> ptr;')
         print('  _Vtb<_Dummy>* vtb;')
     # 构造函数
     print(' public:')
@@ -69,7 +108,7 @@ while True:
         construct += "  template<typename _T>\n"
     else:
         construct += "  template<typename _T, typename _SFINAE = typename std::enable_if<!std::is_same<_T, %s>::value>::type>\n" % interface_name
-    construct += "  %s(_T& t): " % interface_name
+    construct += "  %s(const std::shared_ptr<_T>& t): " % interface_name
     if len(inherit_list) != 0:
         for i in 0, len(inherit_list) - 1:
             construct += '%s(t)' % inherit_list[i]
@@ -79,14 +118,14 @@ while True:
     if len(declare_list) != 0:
         if len(inherit_list) != 0:
             construct += ', '
-        construct += 'ptr(reinterpret_cast<_Dummy*>(&t)), vtb(reinterpret_cast<_Vtb<_Dummy>*>(&_Vtb<_T>::_vtb))'
+        construct += 'ptr(reinterpret_pointer_cast<_Dummy>(t)), vtb(reinterpret_cast<_Vtb<_Dummy>*>(&_Vtb<_T>::_vtb))'
     construct += ' {}'
     print(construct)
     # 通过模拟虚函数表转发函数调用
     for declare in declare_list:
         print('  template<typename ..._Args>')
         print('  %s %s(_Args&& ..._args) const {' % (declare[0], declare[1]))
-        print('    return (ptr->*(vtb->%s))(std::forward<_Args>(_args)...);' % declare[1])
+        print('    return ((ptr.get())->*(vtb->%s))(std::forward<_Args>(_args)...);' % declare[1])
         print('  }')
     print('};')
     print()

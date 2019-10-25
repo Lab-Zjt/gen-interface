@@ -1,14 +1,13 @@
 interface Reader {
-    ssize_t Read(void*, size_t)
+    R<ssize_t,Error> Read(void * buf, size_t size);
 }
 
 interface Writer {
-    ssize_t Write(const void*, size_t)
+    R<ssize_t,Error> Write(const void * buf, size_t size);
 }
 
-interface ReadWriter {
-    Reader
-    Writer
-    ssize_t ReadWrite()
-}
+interface ReadWriter extends Reader, Writer{}
 
+interface Stringify extends Reader{
+  std::string String() const;
+}

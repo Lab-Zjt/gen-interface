@@ -1,6 +1,6 @@
 # gen-interface
 
-C++非侵入式接口代码生成脚本。
+C++非侵入式接口代码生成。
 
 ## 接口定义
 
@@ -9,28 +9,31 @@ C++非侵入式接口代码生成脚本。
 ```i
 interface Reader {
     // 方法定义
-    ssize_t Read(void*, size_t)
+    ssize_t Read(void*, size_t);
 }
 
 interface Writer {
     // 方法定义
-    ssize_t Write(const void*, size_t)
+    ssize_t Write(const void*, size_t);
 }
 
-interface ReadWriter {
-    // 继承定义
-    Reader
-    // 继承定义
-    Writer
+// 继承定义
+interface ReadWriter extends Reader, Writer {
     // 方法定义
-    ssize_t ReadWrite()
+    ssize_t ReadWrite();
 }
 
 ```
 
 ## 接口代码生成
 
-`python3.6 gen_interface.py ${接口定义文件} > ${C++头文件}`
+```sh
+mkdir build
+cd build
+cmake ..
+make
+./gen_interface ../interface.i > ../interface.h
+```
 
 ## 使用
 

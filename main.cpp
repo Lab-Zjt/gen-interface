@@ -5,6 +5,7 @@
 #include <memory>
 #include <fstream>
 #include <algorithm>
+#include <variant>
 #define LOG std::cout << __FILE__ << ':' << __LINE__ << '[' << __FUNCTION__ << "] "
 #define ERR std::cerr << __FILE__ << ':' << __LINE__ << '[' << __FUNCTION__ << "] "
 using std::string;
@@ -39,6 +40,12 @@ struct InterfaceDecl {
   vector<Ptr<MethodDecl>> method_vec;
   vector<string> extends_vec;
 };
+
+struct MacroDecl {
+  string decl;
+};
+
+using TopDecl = std::variant<Ptr<InterfaceDecl>, Ptr<MacroDecl>>;
 
 struct MethodDecl {
   Ptr<TypeDecl> ret;
@@ -242,7 +249,6 @@ Ptr<MethodDecl> ParseMethod(const string &str, int &off) {
   return decl;
 }
 
-
 // 解析一个继承声明，并移动off
 vector<string> ParseExtends(const string &str, int &off) {
   vector<string> extends;
@@ -313,9 +319,25 @@ Ptr<InterfaceDecl> ParseInterface(const string &str, int &off) {
 }
 
 // 解析整个文件
-vector<Ptr<InterfaceDecl>> ParseFile(const string &str, int &off) {
-  vector<Ptr<InterfaceDecl>> decl_vec;
+vector<TopDecl> ParseFile(const string &str, int &off) {
+  vector<TopDecl> decl_vec;
   while (true) {
+    // 解析宏定义
+    auto macro_begin = off;
+    if (ParseString(str, "#", off) || ParseString(str, "//", off)) {
+      while (str[off] != '\n') off++;
+      decl_vec.emplace_back(std::unique_ptr<MacroDecl>(new MacroDecl{
+          move(str.substr(macro_begin, off - macro_begin))}));
+      off++;
+      continue;
+    }
+    if (ParseString(str, "/*", off)) {
+      while (str[off] != '/' || str[off - 1] != '*')off++;
+      decl_vec.emplace_back(std::unique_ptr<MacroDecl>(new MacroDecl{
+          move(str.substr(macro_begin, off - macro_begin))}));
+      off++;
+      continue;
+    }
     // 不断解析interface直到失败
     auto interface = ParseInterface(str, off);
     if (interface == nullptr) {
@@ -355,32 +377,7 @@ int main(int argc, char *argv[]) {
   int off = 0;
   auto vec = ParseFile(str, off);
   auto &ofs = cout;
-  // 共有部分 interface基础代码
-  ofs << "#ifndef _INTERFACE_BASIC_\n"
-         "#define _INTERFACE_BASIC_\n"
-         "#include <memory>\n"
-         "#include <tuple>\n"
-         "#include <cstring>\n"
-         "#define ERRNO Error{strerror(errno)}\n"
-         "template<typename T, typename ...Args>\n"
-         "inline std::shared_ptr<T> New(Args &&...args) {\n"
-         "  return std::make_shared<T>(std::forward<Args>(args)...);\n"
-         "}\n"
-         "template<typename T>\n"
-         "using Ref = std::shared_ptr<T>;\n"
-         "template<typename T>\n"
-         "using Ptr = std::unique_ptr<T>;\n"
-         "template<typename T>\n"
-         "using WeakRef = std::weak_ptr<T>;\n"
-         "template<typename ...Ts>\n"
-         "using R = std::tuple<Ts...>;\n"
-         "struct Error {\n"
-         "  const char *desc = nullptr;\n"
-         "};\n"
-         "bool operator==(const Error &lhs, const Error &rhs) { return lhs.desc == rhs.desc; }\n"
-         "bool operator!=(const Error &lhs, const Error &rhs) { return lhs.desc != rhs.desc; }\n"
-         "Error NoError;\n"
-         "#endif\n";
+  // 头文件保护、智能指针reinterpret_cast
   ofs << "#ifndef " << filename_upper << "\n"
       << "#define " << filename_upper << "\n"
       << "#include <utility>\n"
@@ -394,76 +391,81 @@ int main(int argc, char *argv[]) {
          "using std::reinterpret_pointer_cast;\n"
          "#endif\n";
   // 遍历所有interface
-  for (auto &interface : vec) {
-    ofs << "class " << interface->name;
-    // 如果该interface是对其它接口extends而来的，需要加上继承声明
-    if (!interface->extends_vec.empty()) {
-      ofs << ":";
-      IterableSplit(interface->extends_vec,
-                    [&ofs](const string &s) { ofs << "public " << s; },
-                    [&ofs]() { ofs << ", "; });
-    }
-    ofs << "{\n";
-    // 如果interface的方法列表不为空，需要增加模拟虚函数表，对象指针
-    if (!interface->method_vec.empty()) {
-      ofs << "  struct _Dummy{};\n"
+  for (auto &decl : vec) {
+    if (std::holds_alternative<Ptr<InterfaceDecl>>(decl)) {
+      auto &interface = std::get<0>(decl);
+      ofs << "class " << interface->name;
+      // 如果该interface是对其它接口extends而来的，需要加上继承声明
+      if (!interface->extends_vec.empty()) {
+        ofs << ":";
+        IterableSplit(interface->extends_vec,
+                      [&ofs](const string &s) { ofs << "public " << s; },
+                      [&ofs]() { ofs << ", "; });
+      }
+      ofs << "{\n";
+      // 如果interface的方法列表不为空，需要增加模拟虚函数表，对象指针
+      if (!interface->method_vec.empty()) {
+        ofs << "  struct _Dummy{};\n"
+            << "  template<typename _T>\n"
+            << "  struct _Vtb {\n"
+            << "    static _Vtb _vtb;\n";
+        for (auto &method : interface->method_vec) {
+          ofs << "    " << method->ret->decl << " (_T::* " << method->name << ")(";
+          IterableSplit(method->param_vec,
+                        [&ofs](const Ptr<ParamDecl> &p) { ofs << p->type->decl << " " << p->name; },
+                        [&ofs]() { ofs << ", "; });
+          ofs << ");\n";
+        }
+        ofs << "  };\n";
+        ofs << "  std::shared_ptr<_Dummy> ptr;\n"
+            << "  _Vtb<_Dummy>* vtb;\n";
+      }
+      // 构造函数声明
+      ofs << " public:\n"
           << "  template<typename _T>\n"
-          << "  struct _Vtb {\n"
-          << "    static _Vtb _vtb;\n";
+          << "  " << interface->name << "(std::shared_ptr<_T> t): ";
+      // 如果有继承声明，需要初始化基类
+      if (!interface->extends_vec.empty()) {
+        IterableSplit(interface->extends_vec,
+                      [&ofs](const string &s) { ofs << s << "(t)"; },
+                      [&ofs]() { ofs << ","; });
+      }
+      if (!interface->extends_vec.empty() && !interface->method_vec.empty()) {
+        ofs << ", ";
+      }
+      // 如果有方法声明，需要初始化成员
+      if (!interface->method_vec.empty()) {
+        ofs << "ptr(reinterpret_pointer_cast<_Dummy>(std::move(t))), "
+            << "vtb(reinterpret_cast<_Vtb<_Dummy> *>(&_Vtb<_T>::_vtb))";
+      }
+      ofs << " {}\n";
+      // 对于该interface内的所有方法
       for (auto &method : interface->method_vec) {
-        ofs << "    " << method->ret->decl << " (_T::* " << method->name << ")(";
+        // 将参数转发给虚函数表中的函数
+        ofs << "  " << method->ret->decl << " " << method->name << "(";
         IterableSplit(method->param_vec,
                       [&ofs](const Ptr<ParamDecl> &p) { ofs << p->type->decl << " " << p->name; },
                       [&ofs]() { ofs << ", "; });
+        ofs << ") const {\n";
+        ofs << "    return ((ptr.get())->*(vtb->" << method->name << "))(";
+        IterableSplit(method->param_vec,
+                      [&ofs](const Ptr<ParamDecl> &p) { ofs << p->name; },
+                      [&ofs]() { ofs << ", "; });
         ofs << ");\n";
+        ofs << "  }\n";
       }
-      ofs << "  };\n";
-      ofs << "  Ref<_Dummy> ptr;\n"
-          << "  _Vtb<_Dummy>* vtb;\n";
-    }
-    // 构造函数声明
-    ofs << " public:\n"
-        << "  template<typename _T>\n"
-        << "  " << interface->name << "(Ref<_T> t): ";
-    // 如果有继承声明，需要初始化基类
-    if (!interface->extends_vec.empty()) {
-      IterableSplit(interface->extends_vec,
-                    [&ofs](const string &s) { ofs << s << "(t)"; },
-                    [&ofs]() { ofs << ","; });
-    }
-    if (!interface->extends_vec.empty() && !interface->method_vec.empty()) {
-      ofs << ", ";
-    }
-    // 如果有方法声明，需要初始化成员
-    if (!interface->method_vec.empty()) {
-      ofs << "ptr(reinterpret_pointer_cast<_Dummy>(std::move(t))), "
-          << "vtb(reinterpret_cast<_Vtb<_Dummy> *>(&_Vtb<_T>::_vtb))";
-    }
-    ofs << " {}\n";
-    // 对于该interface内的所有方法
-    for (auto &method : interface->method_vec) {
-      // 将参数转发给虚函数表中的函数
-      ofs << "  " << method->ret->decl << " " << method->name << "(";
-      IterableSplit(method->param_vec,
-                    [&ofs](const Ptr<ParamDecl> &p) { ofs << p->type->decl << " " << p->name; },
-                    [&ofs]() { ofs << ", "; });
-      ofs << ") {\n";
-      ofs << "    return ((ptr.get())->*(vtb->" << method->name << "))(";
-      IterableSplit(method->param_vec,
-                    [&ofs](const Ptr<ParamDecl> &p) { ofs << p->name; },
-                    [&ofs]() { ofs << ", "; });
-      ofs << ");\n";
-      ofs << "  }\n";
-    }
-    ofs << "};\n";
-    // 初始化虚函数表
-    if (!interface->method_vec.empty()) {
-      ofs << "template<typename _T>\n";
-      ofs << interface->name << "::_Vtb<_T> " << interface->name << "::_Vtb<_T>::_vtb = {";
-      IterableSplit(interface->method_vec,
-                    [&ofs](const Ptr<MethodDecl> &p) { ofs << "&_T::" << p->name; },
-                    [&ofs]() { ofs << ", "; });
       ofs << "};\n";
+      // 初始化虚函数表
+      if (!interface->method_vec.empty()) {
+        ofs << "template<typename _T>\n";
+        ofs << interface->name << "::_Vtb<_T> " << interface->name << "::_Vtb<_T>::_vtb = {";
+        IterableSplit(interface->method_vec,
+                      [&ofs](const Ptr<MethodDecl> &p) { ofs << "&_T::" << p->name; },
+                      [&ofs]() { ofs << ", "; });
+        ofs << "};\n";
+      }
+    } else {
+      ofs << std::get<1>(decl)->decl << "\n";
     }
   }
   ofs << "#endif\n";
